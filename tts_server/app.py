@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import asyncio
+import audioop
 import base64
 import io
 import json
@@ -30,7 +31,10 @@ import struct
 import time
 import wave
 from contextlib import asynccontextmanager
+from enum import Enum
 from typing import Any, Dict, Optional
+
+import numpy as np
 
 from fastapi import (
     FastAPI,
@@ -63,6 +67,7 @@ class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000, description="Text to synthesize")
     voice_id: Optional[str] = Field(None, description="Voice ID to use")
     engine: Optional[str] = Field(None, description="Engine to use (overrides default)")
+    output_format: Optional[str] = Field(None, description="Output audio format (wav, pcm_24000_16, mulaw_8000, etc.)")
     temperature: Optional[float] = Field(0.7, ge=0.0, le=1.0, description="Sampling temperature")
     exaggeration: Optional[float] = Field(None, ge=0.0, le=1.0, description="Exaggeration factor (Chatterbox)")
     cfg_weight: Optional[float] = Field(None, ge=0.0, le=1.0, description="CFG weight (Chatterbox)")
@@ -107,7 +112,143 @@ class VoiceResponse(BaseModel):
     is_default: bool
 
 
-# Audio utilities
+# Audio format definitions
+
+class AudioFormat(str, Enum):
+    """Supported audio output formats."""
+    WAV = "wav"                    # WAV file (for /generate endpoint)
+    PCM_24000_16 = "pcm_24000_16"  # Raw PCM, 24kHz, 16-bit signed
+    PCM_24000_F32 = "pcm_24000_f32"  # Raw PCM, 24kHz, float32
+    PCM_16000_16 = "pcm_16000_16"  # Raw PCM, 16kHz, 16-bit signed
+    PCM_8000_16 = "pcm_8000_16"    # Raw PCM, 8kHz, 16-bit signed
+    MULAW_8000 = "mulaw_8000"      # μ-law, 8kHz (telephony)
+    ALAW_8000 = "alaw_8000"        # A-law, 8kHz (telephony)
+
+
+# Audio format metadata
+AUDIO_FORMAT_INFO = {
+    AudioFormat.WAV: {"sample_rate": 24000, "bits": 16, "encoding": "pcm", "channels": 1},
+    AudioFormat.PCM_24000_16: {"sample_rate": 24000, "bits": 16, "encoding": "pcm", "channels": 1},
+    AudioFormat.PCM_24000_F32: {"sample_rate": 24000, "bits": 32, "encoding": "float", "channels": 1},
+    AudioFormat.PCM_16000_16: {"sample_rate": 16000, "bits": 16, "encoding": "pcm", "channels": 1},
+    AudioFormat.PCM_8000_16: {"sample_rate": 8000, "bits": 16, "encoding": "pcm", "channels": 1},
+    AudioFormat.MULAW_8000: {"sample_rate": 8000, "bits": 8, "encoding": "mulaw", "channels": 1},
+    AudioFormat.ALAW_8000: {"sample_rate": 8000, "bits": 8, "encoding": "alaw", "channels": 1},
+}
+
+
+# Audio conversion utilities
+
+def resample_audio(
+    audio_data: bytes,
+    src_rate: int,
+    dst_rate: int,
+    sample_width: int = 2,
+) -> bytes:
+    """Resample audio to a different sample rate using linear interpolation."""
+    if src_rate == dst_rate:
+        return audio_data
+
+    # Convert to numpy for resampling
+    if sample_width == 2:
+        samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+    elif sample_width == 4:
+        samples = np.frombuffer(audio_data, dtype=np.float32)
+    else:
+        samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+
+    # Calculate new length
+    new_length = int(len(samples) * dst_rate / src_rate)
+
+    # Resample using linear interpolation
+    x_old = np.linspace(0, 1, len(samples))
+    x_new = np.linspace(0, 1, new_length)
+    resampled = np.interp(x_new, x_old, samples)
+
+    # Convert back to int16
+    return resampled.astype(np.int16).tobytes()
+
+
+def convert_to_mulaw(audio_data: bytes, sample_width: int = 2) -> bytes:
+    """Convert PCM audio to μ-law encoding."""
+    if sample_width == 4:
+        # Convert float32 to int16 first
+        float_data = np.frombuffer(audio_data, dtype=np.float32)
+        audio_data = (float_data * 32767).astype(np.int16).tobytes()
+        sample_width = 2
+
+    return audioop.lin2ulaw(audio_data, sample_width)
+
+
+def convert_to_alaw(audio_data: bytes, sample_width: int = 2) -> bytes:
+    """Convert PCM audio to A-law encoding."""
+    if sample_width == 4:
+        # Convert float32 to int16 first
+        float_data = np.frombuffer(audio_data, dtype=np.float32)
+        audio_data = (float_data * 32767).astype(np.int16).tobytes()
+        sample_width = 2
+
+    return audioop.lin2alaw(audio_data, sample_width)
+
+
+def convert_audio_format(
+    audio_data: bytes,
+    src_rate: int,
+    src_width: int,
+    output_format: AudioFormat,
+) -> bytes:
+    """
+    Convert audio data to the specified output format.
+
+    Args:
+        audio_data: Raw audio bytes
+        src_rate: Source sample rate (e.g., 24000)
+        src_width: Source sample width in bytes (2 for int16, 4 for float32)
+        output_format: Target audio format
+
+    Returns:
+        Converted audio bytes
+    """
+    format_info = AUDIO_FORMAT_INFO[output_format]
+    dst_rate = format_info["sample_rate"]
+    encoding = format_info["encoding"]
+
+    # First, convert float32 to int16 if needed
+    if src_width == 4:
+        float_data = np.frombuffer(audio_data, dtype=np.float32)
+        audio_data = (float_data * 32767).astype(np.int16).tobytes()
+        src_width = 2
+
+    # Resample if needed
+    if src_rate != dst_rate:
+        audio_data = resample_audio(audio_data, src_rate, dst_rate, src_width)
+
+    # Apply encoding
+    if encoding == "mulaw":
+        audio_data = convert_to_mulaw(audio_data, sample_width=2)
+    elif encoding == "alaw":
+        audio_data = convert_to_alaw(audio_data, sample_width=2)
+    elif encoding == "float" and format_info["bits"] == 32:
+        # Convert int16 back to float32
+        int_data = np.frombuffer(audio_data, dtype=np.int16)
+        audio_data = (int_data / 32767.0).astype(np.float32).tobytes()
+
+    return audio_data
+
+
+def get_audio_format_headers(output_format: AudioFormat) -> dict:
+    """Get HTTP headers describing the audio format."""
+    info = AUDIO_FORMAT_INFO[output_format]
+    return {
+        "X-Audio-Format": output_format.value,
+        "X-Audio-Sample-Rate": str(info["sample_rate"]),
+        "X-Audio-Bits": str(info["bits"]),
+        "X-Audio-Encoding": info["encoding"],
+        "X-Audio-Channels": str(info["channels"]),
+    }
+
+
+# WAV utilities
 
 def audio_to_wav_bytes(
     audio_data: bytes,
@@ -300,6 +441,30 @@ async def switch_engine(config: EngineConfig):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/v1/formats", tags=["Audio"])
+async def list_audio_formats():
+    """
+    List supported audio output formats.
+
+    Returns format details including sample rate, bit depth, and encoding.
+    """
+    return {
+        "formats": {
+            fmt.value: info
+            for fmt, info in AUDIO_FORMAT_INFO.items()
+        },
+        "streaming_formats": [
+            f.value for f in AudioFormat if f != AudioFormat.WAV
+        ],
+        "notes": {
+            "wav": "Complete WAV file, only for /v1/tts/generate",
+            "mulaw_8000": "μ-law 8kHz, standard for telephony (Twilio, etc.)",
+            "alaw_8000": "A-law 8kHz, European telephony standard",
+            "pcm_*": "Raw PCM, specify sample rate and bit depth",
+        },
+    }
+
+
 # TTS Generation Endpoints
 
 @app.post("/v1/tts/generate", tags=["TTS"])
@@ -307,12 +472,32 @@ async def generate_audio(request: TTSRequest):
     """
     Generate audio from text (synchronous, complete file).
 
-    Returns a complete WAV file.
+    Returns audio in the requested format (default: WAV).
+
+    Supported formats:
+    - wav: WAV file (default)
+    - pcm_24000_16: Raw PCM, 24kHz, 16-bit
+    - pcm_16000_16: Raw PCM, 16kHz, 16-bit
+    - pcm_8000_16: Raw PCM, 8kHz, 16-bit
+    - mulaw_8000: μ-law, 8kHz (telephony)
+    - alaw_8000: A-law, 8kHz (telephony)
     """
     manager = get_model_manager()
 
     if not manager.current_engine:
         raise HTTPException(status_code=503, detail="No engine initialized")
+
+    # Parse output format
+    output_format = AudioFormat.WAV
+    if request.output_format:
+        try:
+            output_format = AudioFormat(request.output_format)
+        except ValueError:
+            valid_formats = [f.value for f in AudioFormat]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid output_format. Valid options: {valid_formats}",
+            )
 
     try:
         # Build kwargs from request
@@ -349,20 +534,44 @@ async def generate_audio(request: TTSRequest):
         else:
             sample_width = 2
 
-        wav_data = audio_to_wav_bytes(
-            audio_data,
-            sample_rate=sample_rate,
-            channels=channels,
-            sample_width=sample_width,
-        )
+        # Calculate duration before conversion
+        duration = len(audio_data) / (sample_rate * sample_width)
+
+        # Convert to requested format
+        if output_format == AudioFormat.WAV:
+            output_data = audio_to_wav_bytes(
+                audio_data,
+                sample_rate=sample_rate,
+                channels=channels,
+                sample_width=sample_width,
+            )
+            media_type = "audio/wav"
+        else:
+            output_data = convert_audio_format(
+                audio_data,
+                src_rate=sample_rate,
+                src_width=sample_width,
+                output_format=output_format,
+            )
+            # Raw audio formats
+            if "mulaw" in output_format.value:
+                media_type = "audio/basic"  # Standard for μ-law
+            elif "alaw" in output_format.value:
+                media_type = "audio/basic"
+            else:
+                media_type = "audio/pcm"
+
+        # Build response headers
+        headers = {
+            "X-Generation-Time": str(generation_time),
+            "X-Audio-Duration": str(duration),
+            **get_audio_format_headers(output_format),
+        }
 
         return Response(
-            content=wav_data,
-            media_type="audio/wav",
-            headers={
-                "X-Generation-Time": str(generation_time),
-                "X-Audio-Duration": str(len(audio_data) / (sample_rate * sample_width)),
-            },
+            content=output_data,
+            media_type=media_type,
+            headers=headers,
         )
 
     except Exception as e:
@@ -375,6 +584,7 @@ async def stream_sse(
     text: str = Query(..., min_length=1, max_length=10000),
     voice_id: Optional[str] = Query(None),
     engine: Optional[str] = Query(None, description="Engine to use (overrides default)"),
+    output_format: Optional[str] = Query(None, description="Output format (pcm_24000_16, mulaw_8000, etc.)"),
     chunk_size: int = Query(4096, ge=1024, le=32768),
     temperature: float = Query(0.7, ge=0.0, le=1.0),
     language: Optional[str] = Query(None, description="Language code for multilingual"),
@@ -383,20 +593,54 @@ async def stream_sse(
     Stream audio generation via Server-Sent Events.
 
     Events:
+    - format: Audio format info (sent first)
     - audio: Base64-encoded audio chunk
     - metrics: Generation metrics
     - done: Generation complete
     - error: Error occurred
+
+    Supported output_format values:
+    - pcm_24000_16: Raw PCM, 24kHz, 16-bit (default)
+    - pcm_16000_16: Raw PCM, 16kHz, 16-bit
+    - pcm_8000_16: Raw PCM, 8kHz, 16-bit
+    - mulaw_8000: μ-law, 8kHz (telephony)
+    - alaw_8000: A-law, 8kHz (telephony)
     """
     manager = get_model_manager()
 
     if not manager.current_engine and not engine:
         raise HTTPException(status_code=503, detail="No engine initialized")
 
+    # Parse output format (default to native PCM for streaming)
+    fmt = AudioFormat.PCM_24000_16
+    if output_format:
+        try:
+            fmt = AudioFormat(output_format)
+            if fmt == AudioFormat.WAV:
+                fmt = AudioFormat.PCM_24000_16  # WAV not suitable for streaming
+        except ValueError:
+            valid_formats = [f.value for f in AudioFormat if f != AudioFormat.WAV]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid output_format. Valid options for streaming: {valid_formats}",
+            )
+
     async def event_generator():
         start_time = time.time()
         total_bytes = 0
         chunk_count = 0
+
+        # Get source format info
+        format_type, channels, sample_rate = manager.get_stream_info()
+        import pyaudio
+        if format_type == pyaudio.paFloat32:
+            src_width = 4
+        else:
+            src_width = 2
+
+        # Send format info first
+        format_info = AUDIO_FORMAT_INFO[fmt]
+        yield f"event: format\ndata: {json.dumps(format_info)}\n\n"
 
         try:
             # Acquire lock for generation
@@ -420,6 +664,16 @@ async def stream_sse(
 
                 for chunk in chunks:
                     chunk_count += 1
+
+                    # Convert chunk to requested format
+                    if fmt != AudioFormat.PCM_24000_F32 and fmt != AudioFormat.PCM_24000_16:
+                        chunk = convert_audio_format(
+                            chunk,
+                            src_rate=sample_rate,
+                            src_width=src_width,
+                            output_format=fmt,
+                        )
+
                     total_bytes += len(chunk)
 
                     # Convert chunk to base64
@@ -443,14 +697,18 @@ async def stream_sse(
             logger.error(f"SSE streaming error: {e}")
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
+    # Include format info in headers too
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+        **get_audio_format_headers(fmt),
+    }
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=headers,
     )
 
 
@@ -460,16 +718,24 @@ async def websocket_stream(websocket: WebSocket):
     WebSocket endpoint for bidirectional TTS streaming.
 
     Client messages:
-    - {"action": "generate", "text": "...", "voice_id": "...", "engine": "...", "language": "...", "chunk_size": 4096}
+    - {"action": "generate", "text": "...", "voice_id": "...", "engine": "...", "language": "...", "output_format": "mulaw_8000", "chunk_size": 4096}
     - {"action": "stop"}
     - {"action": "ping"}
 
     Server messages:
+    - {"type": "format", "data": {...}}  (sent first, contains audio format info)
     - Binary audio chunks
     - {"type": "metrics", "data": {...}}
     - {"type": "done"}
     - {"type": "error", "message": "..."}
     - {"type": "pong"}
+
+    Supported output_format values:
+    - pcm_24000_16: Raw PCM, 24kHz, 16-bit (default)
+    - pcm_16000_16: Raw PCM, 16kHz, 16-bit
+    - pcm_8000_16: Raw PCM, 8kHz, 16-bit
+    - mulaw_8000: μ-law, 8kHz (telephony)
+    - alaw_8000: A-law, 8kHz (telephony)
     """
     await websocket.accept()
     manager = get_model_manager()
@@ -499,6 +765,7 @@ async def websocket_stream(websocket: WebSocket):
                 voice_id = data.get("voice_id")
                 engine = data.get("engine")
                 language = data.get("language")
+                output_format_str = data.get("output_format")
                 chunk_size = data.get("chunk_size", 4096)
 
                 if not text:
@@ -509,6 +776,33 @@ async def websocket_stream(websocket: WebSocket):
                 if not manager.current_engine and not engine:
                     await websocket.send_json({"type": "error", "message": "No engine initialized"})
                     continue
+
+                # Parse output format
+                fmt = AudioFormat.PCM_24000_16
+                if output_format_str:
+                    try:
+                        fmt = AudioFormat(output_format_str)
+                        if fmt == AudioFormat.WAV:
+                            fmt = AudioFormat.PCM_24000_16
+                    except ValueError:
+                        valid_formats = [f.value for f in AudioFormat if f != AudioFormat.WAV]
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Invalid output_format. Valid options: {valid_formats}",
+                        })
+                        continue
+
+                # Get source format info
+                format_type, channels, sample_rate = manager.get_stream_info()
+                import pyaudio
+                if format_type == pyaudio.paFloat32:
+                    src_width = 4
+                else:
+                    src_width = 2
+
+                # Send format info first
+                format_info = AUDIO_FORMAT_INFO[fmt]
+                await websocket.send_json({"type": "format", "data": format_info})
 
                 start_time = time.time()
                 total_bytes = 0
@@ -537,6 +831,15 @@ async def websocket_stream(websocket: WebSocket):
                             if stop_flag.is_set():
                                 break
 
+                            # Convert chunk to requested format
+                            if fmt != AudioFormat.PCM_24000_F32 and fmt != AudioFormat.PCM_24000_16:
+                                chunk = convert_audio_format(
+                                    chunk,
+                                    src_rate=sample_rate,
+                                    src_width=src_width,
+                                    output_format=fmt,
+                                )
+
                             chunk_count += 1
                             total_bytes += len(chunk)
 
@@ -551,6 +854,7 @@ async def websocket_stream(websocket: WebSocket):
                             "generation_time": generation_time,
                             "total_bytes": total_bytes,
                             "chunk_count": chunk_count,
+                            "output_format": fmt.value,
                         },
                     })
 

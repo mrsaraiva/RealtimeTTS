@@ -6,6 +6,7 @@ A production-ready FastAPI server for text-to-speech synthesis with support for 
 
 - **Multiple Streaming Protocols**: REST, Server-Sent Events (SSE), and WebSocket
 - **Multi-Engine Support**: Switch between TTS engines on-the-fly
+- **Multiple Audio Formats**: WAV, PCM, μ-law, A-law (telephony compatible)
 - **Voice Management**: Create, list, and delete custom voices
 - **Async Architecture**: Non-blocking operations with proper concurrency control
 - **Health Monitoring**: Built-in health check endpoint
@@ -58,6 +59,35 @@ TTS_ENGINE=chatterbox CHATTERBOX_MODEL_TYPE=turbo uvicorn tts_server.app:app
 
 **Multi-Engine Mode:** When `TTS_ENGINES` is set, all specified engines are pre-loaded at startup. This eliminates cold-start latency when switching between engines via the API. Use `TTS_DEFAULT_ENGINE` to specify which engine is active by default.
 
+### Audio Formats
+
+The server supports multiple audio output formats, including telephony-compatible formats:
+
+| Format | Sample Rate | Encoding | Use Case |
+|--------|-------------|----------|----------|
+| `wav` | 24kHz | 16-bit PCM | Default for `/generate`, complete file |
+| `pcm_24000_16` | 24kHz | 16-bit PCM | Default for streaming, high quality |
+| `pcm_24000_f32` | 24kHz | 32-bit float | Native engine format |
+| `pcm_16000_16` | 16kHz | 16-bit PCM | Speech recognition compatible |
+| `pcm_8000_16` | 8kHz | 16-bit PCM | Telephony (uncompressed) |
+| `mulaw_8000` | 8kHz | μ-law | **Telephony standard** (Twilio, etc.) |
+| `alaw_8000` | 8kHz | A-law | European telephony |
+
+**Telephony Example (μ-law for Twilio/Vonage):**
+```bash
+# REST API
+curl -X POST http://localhost:8000/v1/tts/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello caller!", "output_format": "mulaw_8000"}' \
+  --output telephony.raw
+
+# SSE Streaming
+curl "http://localhost:8000/v1/tts/stream-sse?text=Hello&output_format=mulaw_8000"
+
+# WebSocket
+{"action": "generate", "text": "Hello", "output_format": "mulaw_8000"}
+```
+
 ## API Reference
 
 ### Health Check
@@ -87,6 +117,7 @@ Content-Type: application/json
 - `text` (required): Text to synthesize
 - `voice_id` (optional): Voice ID to use
 - `engine` (optional): Engine to use for this request (e.g., "chatterbox", "kokoro")
+- `output_format` (optional): Audio format (default: "wav"). See [Audio Formats](#audio-formats)
 - `temperature` (optional): Sampling temperature (0.0-1.0)
 - `exaggeration` (optional): Exaggeration factor for Chatterbox (0.0-1.0)
 - `cfg_weight` (optional): CFG weight for Chatterbox (0.0-1.0)
@@ -104,7 +135,22 @@ Content-Type: application/json
 }
 ```
 
-Returns a complete WAV file.
+**Telephony format (μ-law):**
+```bash
+POST /v1/tts/generate
+Content-Type: application/json
+
+{
+  "text": "Hello caller!",
+  "output_format": "mulaw_8000"
+}
+```
+
+Returns audio in the requested format (default: WAV). Response includes headers:
+- `X-Audio-Format`: Output format (e.g., "mulaw_8000")
+- `X-Audio-Sample-Rate`: Sample rate in Hz
+- `X-Audio-Encoding`: Encoding type (pcm, mulaw, alaw)
+- `X-Audio-Bits`: Bits per sample
 
 #### Stream via SSE
 
@@ -116,6 +162,7 @@ GET /v1/tts/stream-sse?text=Hello&voice_id=default&chunk_size=4096
 - `text` (required): Text to synthesize
 - `voice_id` (optional): Voice ID to use
 - `engine` (optional): Engine to use for this request
+- `output_format` (optional): Audio format (default: "pcm_24000_16"). See [Audio Formats](#audio-formats)
 - `chunk_size` (optional): Size of audio chunks (default: 4096)
 - `temperature` (optional): Sampling temperature (default: 0.7)
 - `language` (optional): Language code for multilingual engines
@@ -125,9 +172,15 @@ GET /v1/tts/stream-sse?text=Hello&voice_id=default&chunk_size=4096
 GET /v1/tts/stream-sse?text=Hello&engine=kokoro
 ```
 
-Returns Server-Sent Events with base64-encoded audio chunks.
+**Telephony streaming (μ-law):**
+```bash
+GET /v1/tts/stream-sse?text=Hello&output_format=mulaw_8000
+```
+
+Returns Server-Sent Events with base64-encoded audio chunks. Response includes `X-Audio-*` headers.
 
 Events:
+- `format`: `{"sample_rate": 8000, "bits": 8, "encoding": "mulaw", "channels": 1}` (sent first)
 - `audio`: `{"chunk": "<base64>", "index": 1}`
 - `metrics`: `{"generation_time": 1.2, "total_bytes": 48000}`
 - `done`: `{"status": "complete"}`
@@ -142,6 +195,7 @@ Client messages:
 ```json
 {"action": "generate", "text": "Hello", "voice_id": "default"}
 {"action": "generate", "text": "Hola", "engine": "chatterbox", "language": "es"}
+{"action": "generate", "text": "Hello caller", "output_format": "mulaw_8000"}
 {"action": "stop"}
 {"action": "ping"}
 ```
@@ -150,11 +204,13 @@ Client messages:
 - `text` (required): Text to synthesize
 - `voice_id` (optional): Voice ID to use
 - `engine` (optional): Engine to use for this request
+- `output_format` (optional): Audio format (default: "pcm_24000_16"). See [Audio Formats](#audio-formats)
 - `language` (optional): Language code for multilingual engines
 - `chunk_size` (optional): Size of audio chunks (default: 4096)
 
 Server messages:
-- Binary audio chunks
+- `{"type": "format", "data": {...}}` (sent first, contains audio format info)
+- Binary audio chunks (in requested format)
 - `{"type": "metrics", "data": {...}}`
 - `{"type": "done"}`
 - `{"type": "pong"}`
@@ -186,6 +242,16 @@ Changes the default engine used when no `engine` parameter is specified.
 **Note:** When using multi-engine mode (pre-loading multiple engines at startup), you can switch between loaded engines instantly by specifying the `engine` parameter in your requests. The `/v1/engines/switch` endpoint is useful for:
 - Changing the default engine for requests that don't specify one
 - Loading a new engine that wasn't pre-loaded at startup
+
+### Audio Formats
+
+#### List Supported Formats
+
+```bash
+GET /v1/formats
+```
+
+Returns all supported audio output formats with their specifications.
 
 ### Voice Management
 
