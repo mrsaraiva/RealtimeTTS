@@ -5,7 +5,7 @@ stream2sentence==0.3.1
 azure-cognitiveservices-speech==1.45.0
 
 # coqui_tts is for CoquiEngine
-coqui_tts==0.27.0
+#coqui_tts==0.27.0
 
 # elevenlabs is for ElevenlabsEngine
 elevenlabs==2.8.0
@@ -29,7 +29,7 @@ kokoro==0.9.4
 snac==1.2.1
 
 # chatterbox-tts is for ChatterboxEngine
-chatterbox-tts==0.1.1
+chatterbox-tts==0.1.6
 
 # fugashi is to support japanese language for KokoroEngine
 fugashi==1.4.0
