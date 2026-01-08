@@ -141,24 +141,63 @@ class ModelManager:
             engine_config: Configuration dict for the engine.
             voices_path: Path to store/load voice files.
         """
+        await self.initialize_engines(
+            engine_types=[engine_type],
+            default_engine=engine_type,
+            engine_configs={engine_type: engine_config or {}},
+            voices_path=voices_path,
+        )
+
+    async def initialize_engines(
+        self,
+        engine_types: List[str],
+        default_engine: Optional[str] = None,
+        engine_configs: Optional[Dict[str, Dict[str, Any]]] = None,
+        voices_path: Optional[str] = None,
+    ) -> None:
+        """
+        Initialize the model manager with multiple engines.
+
+        Args:
+            engine_types: List of engine types to pre-load.
+            default_engine: Which engine to set as active (defaults to first in list).
+            engine_configs: Dict mapping engine type to its configuration.
+            voices_path: Path to store/load voice files.
+        """
         if voices_path:
             self._voices_path = Path(voices_path)
 
         self._voices_path.mkdir(parents=True, exist_ok=True)
 
-        # Load engine in thread pool to avoid blocking
+        engine_configs = engine_configs or {}
+
+        # Load all engines
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            self._executor,
-            self._load_engine_sync,
-            engine_type,
-            engine_config or {},
-        )
+        for engine_type in engine_types:
+            config = engine_configs.get(engine_type, {})
+            try:
+                logger.info(f"Pre-loading engine: {engine_type}")
+                await loop.run_in_executor(
+                    self._executor,
+                    self._load_engine_sync,
+                    engine_type,
+                    config,
+                )
+            except Exception as e:
+                logger.error(f"Failed to pre-load engine {engine_type}: {e}")
+                # Continue loading other engines
+
+        # Set the default/active engine
+        if default_engine and default_engine in self._engines:
+            self._current_engine_name = default_engine
+        elif engine_types and engine_types[0] in self._engines:
+            self._current_engine_name = engine_types[0]
 
         # Load cached voices
         self._load_voices_from_disk()
 
-        logger.info(f"ModelManager initialized with engine: {engine_type}")
+        loaded_engines = ", ".join(self._engines.keys())
+        logger.info(f"ModelManager initialized with engines: [{loaded_engines}], active: {self._current_engine_name}")
 
     def _load_engine_sync(
         self,

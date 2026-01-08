@@ -25,8 +25,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # TTS Engine: system, azure, openai, elevenlabs, coqui, kokoro, edge, gtts, chatterbox
+      # Single engine mode (use TTS_ENGINE or TTS_ENGINES, not both)
+      # TTS_ENGINE: system, azure, openai, elevenlabs, coqui, kokoro, edge, gtts, chatterbox
       - TTS_ENGINE=${TTS_ENGINE:-chatterbox}
+      # Multi-engine mode: comma-separated list of engines to pre-load
+      # Example: TTS_ENGINES=chatterbox,kokoro
+      - TTS_ENGINES=${TTS_ENGINES:-}
+      # Default engine when using TTS_ENGINES (defaults to first in list)
+      - TTS_DEFAULT_ENGINE=${TTS_DEFAULT_ENGINE:-}
       # Chatterbox model type: standard, turbo, multilingual
       - CHATTERBOX_MODEL_TYPE=${CHATTERBOX_MODEL_TYPE:-standard}
       # Voices directory (inside container)

@@ -92,6 +92,7 @@ class HealthResponse(BaseModel):
     """Health check response."""
     status: str
     engine: Optional[str]
+    loaded_engines: list[str]
     device: str
     voices_count: int
 
@@ -165,31 +166,69 @@ def create_wav_header(
 
 # App lifecycle
 
+def _parse_engine_config(engine_type: str) -> dict:
+    """Parse engine-specific configuration from environment variables."""
+    config = {}
+
+    if engine_type == "chatterbox":
+        model_type = os.environ.get("CHATTERBOX_MODEL_TYPE", "standard")
+        config["model_type"] = model_type
+
+    # Add more engine-specific configs here as needed
+
+    return config
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
     manager = get_model_manager()
 
-    engine_type = os.environ.get("TTS_ENGINE", "system")
     voices_path = os.environ.get("TTS_VOICES_PATH", "./voices")
 
-    # Parse engine config from environment
-    engine_config = {}
-    if engine_type == "chatterbox":
-        model_type = os.environ.get("CHATTERBOX_MODEL_TYPE", "standard")
-        engine_config["model_type"] = model_type
+    # Check for multi-engine configuration
+    engines_str = os.environ.get("TTS_ENGINES", "")
+    default_engine = os.environ.get("TTS_DEFAULT_ENGINE", "")
 
-    try:
-        await manager.initialize(
-            engine_type=engine_type,
-            engine_config=engine_config,
-            voices_path=voices_path,
-        )
-        logger.info(f"Server started with engine: {engine_type}")
-    except Exception as e:
-        logger.error(f"Failed to initialize engine: {e}")
-        # Continue anyway - can be initialized later via API
+    if engines_str:
+        # Multi-engine mode: pre-load multiple engines
+        engine_types = [e.strip() for e in engines_str.split(",") if e.strip()]
+
+        # Build config for each engine
+        engine_configs = {}
+        for engine_type in engine_types:
+            engine_configs[engine_type] = _parse_engine_config(engine_type)
+
+        # Use TTS_DEFAULT_ENGINE or fall back to first engine
+        if not default_engine:
+            default_engine = engine_types[0] if engine_types else "system"
+
+        try:
+            await manager.initialize_engines(
+                engine_types=engine_types,
+                default_engine=default_engine,
+                engine_configs=engine_configs,
+                voices_path=voices_path,
+            )
+            logger.info(f"Server started with engines: {engine_types}, default: {default_engine}")
+        except Exception as e:
+            logger.error(f"Failed to initialize engines: {e}")
+    else:
+        # Single engine mode (backwards compatible)
+        engine_type = os.environ.get("TTS_ENGINE", "system")
+        engine_config = _parse_engine_config(engine_type)
+
+        try:
+            await manager.initialize(
+                engine_type=engine_type,
+                engine_config=engine_config,
+                voices_path=voices_path,
+            )
+            logger.info(f"Server started with engine: {engine_type}")
+        except Exception as e:
+            logger.error(f"Failed to initialize engine: {e}")
+            # Continue anyway - can be initialized later via API
 
     yield
 
@@ -226,6 +265,7 @@ async def health_check():
     return HealthResponse(
         status="healthy" if manager.current_engine else "no_engine",
         engine=manager.current_engine_name,
+        loaded_engines=manager.available_engines,
         device=manager.device,
         voices_count=len(manager.get_voices()),
     )
@@ -615,7 +655,9 @@ def main():
     parser = argparse.ArgumentParser(description="RealtimeTTS Production Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
-    parser.add_argument("--engine", default="system", help="TTS engine to use")
+    parser.add_argument("--engine", default=None, help="Single TTS engine to use (use --engines for multiple)")
+    parser.add_argument("--engines", default=None, help="Comma-separated list of engines to pre-load (e.g., 'chatterbox,kokoro')")
+    parser.add_argument("--default-engine", default=None, help="Default engine when using --engines")
     parser.add_argument("--model-type", default="standard", help="Model type for Chatterbox")
     parser.add_argument("--voices-path", default="./voices", help="Path to voices directory")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
@@ -623,10 +665,24 @@ def main():
     args = parser.parse_args()
 
     # Set environment variables for lifespan
-    os.environ["TTS_ENGINE"] = args.engine
     os.environ["TTS_VOICES_PATH"] = args.voices_path
-    if args.engine == "chatterbox":
-        os.environ["CHATTERBOX_MODEL_TYPE"] = args.model_type
+
+    if args.engines:
+        # Multi-engine mode
+        os.environ["TTS_ENGINES"] = args.engines
+        if args.default_engine:
+            os.environ["TTS_DEFAULT_ENGINE"] = args.default_engine
+        # Check if chatterbox is in the list
+        if "chatterbox" in args.engines:
+            os.environ["CHATTERBOX_MODEL_TYPE"] = args.model_type
+    elif args.engine:
+        # Single engine mode
+        os.environ["TTS_ENGINE"] = args.engine
+        if args.engine == "chatterbox":
+            os.environ["CHATTERBOX_MODEL_TYPE"] = args.model_type
+    else:
+        # Default to system engine
+        os.environ["TTS_ENGINE"] = "system"
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)

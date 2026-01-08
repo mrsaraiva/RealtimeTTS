@@ -26,11 +26,17 @@ pip install realtimetts[all]          # For all engines
 ### Running the Server
 
 ```bash
-# Using the CLI
+# Single engine mode
 python -m tts_server.app --engine chatterbox --port 8000
+
+# Multi-engine mode: pre-load multiple engines at startup
+python -m tts_server.app --engines chatterbox,kokoro --default-engine chatterbox
 
 # Or with uvicorn directly
 TTS_ENGINE=chatterbox uvicorn tts_server.app:app --host 0.0.0.0 --port 8000
+
+# Multi-engine with environment variables
+TTS_ENGINES=chatterbox,kokoro TTS_DEFAULT_ENGINE=chatterbox uvicorn tts_server.app:app
 
 # With Chatterbox Turbo model
 TTS_ENGINE=chatterbox CHATTERBOX_MODEL_TYPE=turbo uvicorn tts_server.app:app
@@ -40,13 +46,17 @@ TTS_ENGINE=chatterbox CHATTERBOX_MODEL_TYPE=turbo uvicorn tts_server.app:app
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TTS_ENGINE` | `system` | TTS engine to use |
+| `TTS_ENGINE` | `system` | Single TTS engine to use |
+| `TTS_ENGINES` | - | Comma-separated list of engines to pre-load (e.g., `chatterbox,kokoro`) |
+| `TTS_DEFAULT_ENGINE` | - | Default active engine when using `TTS_ENGINES` |
 | `TTS_VOICES_PATH` | `./voices` | Directory for voice files |
-| `CHATTERBOX_MODEL_TYPE` | `standard` | Chatterbox model variant |
+| `CHATTERBOX_MODEL_TYPE` | `standard` | Chatterbox model variant (`standard`, `turbo`, `multilingual`) |
 | `AZURE_SPEECH_KEY` | - | Azure Speech API key |
 | `AZURE_SPEECH_REGION` | - | Azure region |
 | `ELEVENLABS_API_KEY` | - | ElevenLabs API key |
 | `OPENAI_API_KEY` | - | OpenAI API key |
+
+**Multi-Engine Mode:** When `TTS_ENGINES` is set, all specified engines are pre-loaded at startup. This eliminates cold-start latency when switching between engines via the API. Use `TTS_DEFAULT_ENGINE` to specify which engine is active by default.
 
 ## API Reference
 
@@ -249,8 +259,12 @@ docker-compose down
 Create a `.env` file to customize:
 
 ```bash
-# TTS Engine (default: chatterbox)
+# Single engine mode
 TTS_ENGINE=chatterbox
+
+# OR Multi-engine mode (pre-load multiple engines)
+TTS_ENGINES=chatterbox,kokoro
+TTS_DEFAULT_ENGINE=chatterbox
 
 # Chatterbox model type: standard, turbo, multilingual
 CHATTERBOX_MODEL_TYPE=turbo
