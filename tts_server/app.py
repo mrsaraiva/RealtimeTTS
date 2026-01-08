@@ -21,7 +21,6 @@ Usage:
 
 import argparse
 import asyncio
-import audioop
 import base64
 import io
 import json
@@ -35,6 +34,81 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 import numpy as np
+
+
+# μ-law and A-law encoding tables and functions (replaces deprecated audioop)
+# These are ITU-T G.711 standard implementations
+
+# μ-law encoding parameters
+MULAW_BIAS = 0x84
+MULAW_CLIP = 32635
+MULAW_ENCODE_TABLE = np.array([
+    0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+], dtype=np.uint8)
+
+
+def _lin2mulaw(samples: np.ndarray) -> np.ndarray:
+    """Convert 16-bit linear PCM samples to μ-law (ITU-T G.711)."""
+    # Get sign bit
+    sign = (samples >> 8) & 0x80
+    # Get magnitude (absolute value)
+    samples = np.where(samples < 0, -samples, samples)
+    # Clip to max value
+    samples = np.clip(samples, 0, MULAW_CLIP)
+    # Add bias
+    samples = samples + MULAW_BIAS
+    # Get exponent from lookup table
+    exponent = MULAW_ENCODE_TABLE[(samples >> 7) & 0xFF]
+    # Get mantissa
+    mantissa = (samples >> (exponent + 3)) & 0x0F
+    # Combine and complement
+    return ~(sign | (exponent << 4) | mantissa) & 0xFF
+
+
+def _lin2alaw(samples: np.ndarray) -> np.ndarray:
+    """Convert 16-bit linear PCM samples to A-law (ITU-T G.711)."""
+    # Get sign
+    sign = ((~samples) >> 8) & 0x80
+    # Get magnitude
+    samples = np.where(samples < 0, -samples, samples)
+
+    result = np.zeros_like(samples, dtype=np.uint8)
+
+    # For samples >= 256
+    mask = samples >= 256
+    if np.any(mask):
+        s = samples[mask]
+        # Find exponent (position of highest bit)
+        exponent = np.zeros_like(s)
+        temp = s.copy()
+        for i in range(7, 0, -1):
+            bit_mask = temp >= (1 << (i + 8))
+            exponent = np.where(bit_mask & (exponent == 0), i, exponent)
+
+        mantissa = (s >> (exponent + 3)) & 0x0F
+        result[mask] = ((exponent << 4) | mantissa).astype(np.uint8)
+
+    # For samples < 256
+    mask = samples < 256
+    if np.any(mask):
+        result[mask] = (samples[mask] >> 4).astype(np.uint8)
+
+    return (sign | result) ^ 0x55
 
 from fastapi import (
     FastAPI,
@@ -169,26 +243,50 @@ def resample_audio(
     return resampled.astype(np.int16).tobytes()
 
 
-def convert_to_mulaw(audio_data: bytes, sample_width: int = 2) -> bytes:
-    """Convert PCM audio to μ-law encoding."""
-    if sample_width == 4:
-        # Convert float32 to int16 first
-        float_data = np.frombuffer(audio_data, dtype=np.float32)
-        audio_data = (float_data * 32767).astype(np.int16).tobytes()
-        sample_width = 2
+def _safe_float32_to_int16(float_data: np.ndarray) -> np.ndarray:
+    """
+    Safely convert float32 audio data to int16, handling NaN/Inf values.
 
-    return audioop.lin2ulaw(audio_data, sample_width)
+    Args:
+        float_data: Float32 audio samples (expected range [-1.0, 1.0])
+
+    Returns:
+        Int16 audio samples
+    """
+    # Replace NaN with 0
+    float_data = np.nan_to_num(float_data, nan=0.0, posinf=1.0, neginf=-1.0)
+    # Clip to valid range [-1.0, 1.0]
+    float_data = np.clip(float_data, -1.0, 1.0)
+    # Convert to int16
+    return (float_data * 32767).astype(np.int16)
+
+
+def convert_to_mulaw(audio_data: bytes, sample_width: int = 2) -> bytes:
+    """Convert PCM audio to μ-law encoding (ITU-T G.711)."""
+    if sample_width == 4:
+        # Convert float32 to int16 first (safely)
+        float_data = np.frombuffer(audio_data, dtype=np.float32)
+        samples = _safe_float32_to_int16(float_data)
+    else:
+        samples = np.frombuffer(audio_data, dtype=np.int16)
+
+    # Convert to μ-law using numpy implementation
+    mulaw_samples = _lin2mulaw(samples.astype(np.int32))
+    return mulaw_samples.astype(np.uint8).tobytes()
 
 
 def convert_to_alaw(audio_data: bytes, sample_width: int = 2) -> bytes:
-    """Convert PCM audio to A-law encoding."""
+    """Convert PCM audio to A-law encoding (ITU-T G.711)."""
     if sample_width == 4:
-        # Convert float32 to int16 first
+        # Convert float32 to int16 first (safely)
         float_data = np.frombuffer(audio_data, dtype=np.float32)
-        audio_data = (float_data * 32767).astype(np.int16).tobytes()
-        sample_width = 2
+        samples = _safe_float32_to_int16(float_data)
+    else:
+        samples = np.frombuffer(audio_data, dtype=np.int16)
 
-    return audioop.lin2alaw(audio_data, sample_width)
+    # Convert to A-law using numpy implementation
+    alaw_samples = _lin2alaw(samples.astype(np.int32))
+    return alaw_samples.astype(np.uint8).tobytes()
 
 
 def convert_audio_format(
@@ -216,7 +314,7 @@ def convert_audio_format(
     # First, convert float32 to int16 if needed
     if src_width == 4:
         float_data = np.frombuffer(audio_data, dtype=np.float32)
-        audio_data = (float_data * 32767).astype(np.int16).tobytes()
+        audio_data = _safe_float32_to_int16(float_data).tobytes()
         src_width = 2
 
     # Resample if needed
