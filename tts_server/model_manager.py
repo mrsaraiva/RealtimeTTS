@@ -127,6 +127,18 @@ class ModelManager:
         """List of registered engine names."""
         return list(self._engines.keys())
 
+    def get_engine(self, engine_type: str) -> Optional[BaseEngine]:
+        """
+        Get a specific engine by type.
+
+        Args:
+            engine_type: Type of engine to retrieve.
+
+        Returns:
+            The engine instance if loaded, None otherwise.
+        """
+        return self._engines.get(engine_type.lower())
+
     async def initialize(
         self,
         engine_type: str = "system",
@@ -300,6 +312,7 @@ class ModelManager:
         self,
         text: str,
         voice_id: Optional[str] = None,
+        engine: Optional[str] = None,
         **kwargs,
     ) -> bytes:
         """
@@ -308,25 +321,34 @@ class ModelManager:
         Args:
             text: Text to synthesize.
             voice_id: Optional voice to use.
+            engine: Optional engine type to use (overrides current engine).
             **kwargs: Additional parameters passed to engine.
 
         Returns:
             Complete audio data as bytes.
         """
         async with self.request_lock:
-            if not self.current_engine:
-                raise RuntimeError("No engine initialized")
+            # Determine which engine to use
+            target_engine = None
+            if engine:
+                target_engine = self.get_engine(engine)
+                if not target_engine:
+                    raise ValueError(f"Engine '{engine}' is not loaded. Available engines: {', '.join(self.available_engines)}")
+            else:
+                target_engine = self.current_engine
+                if not target_engine:
+                    raise RuntimeError("No engine initialized")
 
             # Set voice if specified
             if voice_id and voice_id in self._voices:
                 voice_info = self._voices[voice_id]
                 if voice_info.audio_path:
-                    self.current_engine.set_voice(voice_info.audio_path)
+                    target_engine.set_voice(voice_info.audio_path)
 
             # Set additional parameters
             if kwargs:
                 try:
-                    self.current_engine.set_voice_parameters(**kwargs)
+                    target_engine.set_voice_parameters(**kwargs)
                 except NotImplementedError:
                     pass
 
@@ -336,13 +358,15 @@ class ModelManager:
                 self._executor,
                 self._generate_sync,
                 text,
+                target_engine,
             )
 
             return audio_data
 
-    def _generate_sync(self, text: str) -> bytes:
+    def _generate_sync(self, text: str, engine: Optional[BaseEngine] = None) -> bytes:
         """Synchronously generate audio (runs in thread pool)."""
-        engine = self.current_engine
+        if engine is None:
+            engine = self.current_engine
         if not engine:
             raise RuntimeError("No engine initialized")
 
@@ -365,6 +389,7 @@ class ModelManager:
         text: str,
         voice_id: Optional[str] = None,
         chunk_size: int = 4096,
+        engine: Optional[str] = None,
         **kwargs,
     ) -> Generator[bytes, None, None]:
         """
@@ -374,36 +399,43 @@ class ModelManager:
             text: Text to synthesize.
             voice_id: Optional voice to use.
             chunk_size: Size of chunks to yield.
+            engine: Optional engine type to use (overrides current engine).
             **kwargs: Additional parameters.
 
         Yields:
             Audio data chunks.
         """
-        engine = self.current_engine
-        if not engine:
-            raise RuntimeError("No engine initialized")
+        # Determine which engine to use
+        if engine:
+            target_engine = self.get_engine(engine)
+            if not target_engine:
+                raise ValueError(f"Engine '{engine}' is not loaded. Available engines: {', '.join(self.available_engines)}")
+        else:
+            target_engine = self.current_engine
+            if not target_engine:
+                raise RuntimeError("No engine initialized")
 
         # Set voice if specified
         if voice_id and voice_id in self._voices:
             voice_info = self._voices[voice_id]
             if voice_info.audio_path:
-                engine.set_voice(voice_info.audio_path)
+                target_engine.set_voice(voice_info.audio_path)
 
         # Set additional parameters
         if kwargs:
             try:
-                engine.set_voice_parameters(**kwargs)
+                target_engine.set_voice_parameters(**kwargs)
             except NotImplementedError:
                 pass
 
         # Check if engine has generate_stream method (like ChatterboxEngine)
-        if hasattr(engine, "generate_stream"):
-            yield from engine.generate_stream(text, chunk_size=chunk_size)
+        if hasattr(target_engine, "generate_stream"):
+            yield from target_engine.generate_stream(text, chunk_size=chunk_size)
         else:
             # Fallback: use queue-based synthesis
             # Clear the queue
-            while not engine.queue.empty():
-                engine.queue.get()
+            while not target_engine.queue.empty():
+                target_engine.queue.get()
 
             # Start synthesis in a separate thread
             import threading
@@ -411,7 +443,7 @@ class ModelManager:
 
             def synthesize_thread():
                 try:
-                    engine.synthesize(text)
+                    target_engine.synthesize(text)
                 finally:
                     synthesis_done.set()
 
@@ -419,9 +451,9 @@ class ModelManager:
             thread.start()
 
             # Yield chunks as they become available
-            while not synthesis_done.is_set() or not engine.queue.empty():
+            while not synthesis_done.is_set() or not target_engine.queue.empty():
                 try:
-                    chunk = engine.queue.get(timeout=0.1)
+                    chunk = target_engine.queue.get(timeout=0.1)
                     yield chunk
                 except Exception:
                     if synthesis_done.is_set():

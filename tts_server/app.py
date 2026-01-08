@@ -62,6 +62,7 @@ class TTSRequest(BaseModel):
     """Request model for TTS generation."""
     text: str = Field(..., min_length=1, max_length=10000, description="Text to synthesize")
     voice_id: Optional[str] = Field(None, description="Voice ID to use")
+    engine: Optional[str] = Field(None, description="Engine to use (overrides default)")
     temperature: Optional[float] = Field(0.7, ge=0.0, le=1.0, description="Sampling temperature")
     exaggeration: Optional[float] = Field(None, ge=0.0, le=1.0, description="Exaggeration factor (Chatterbox)")
     cfg_weight: Optional[float] = Field(None, ge=0.0, le=1.0, description="CFG weight (Chatterbox)")
@@ -330,6 +331,7 @@ async def generate_audio(request: TTSRequest):
         audio_data = await manager.generate(
             text=request.text,
             voice_id=request.voice_id,
+            engine=request.engine,
             **kwargs,
         )
 
@@ -372,8 +374,10 @@ async def generate_audio(request: TTSRequest):
 async def stream_sse(
     text: str = Query(..., min_length=1, max_length=10000),
     voice_id: Optional[str] = Query(None),
+    engine: Optional[str] = Query(None, description="Engine to use (overrides default)"),
     chunk_size: int = Query(4096, ge=1024, le=32768),
     temperature: float = Query(0.7, ge=0.0, le=1.0),
+    language: Optional[str] = Query(None, description="Language code for multilingual"),
 ):
     """
     Stream audio generation via Server-Sent Events.
@@ -386,7 +390,7 @@ async def stream_sse(
     """
     manager = get_model_manager()
 
-    if not manager.current_engine:
+    if not manager.current_engine and not engine:
         raise HTTPException(status_code=503, detail="No engine initialized")
 
     async def event_generator():
@@ -401,11 +405,15 @@ async def stream_sse(
 
                 # Run streaming in thread pool
                 def generate():
+                    kwargs = {"temperature": temperature}
+                    if language:
+                        kwargs["language"] = language
                     return list(manager.generate_stream(
                         text=text,
                         voice_id=voice_id,
                         chunk_size=chunk_size,
-                        temperature=temperature,
+                        engine=engine,
+                        **kwargs,
                     ))
 
                 chunks = await loop.run_in_executor(None, generate)
@@ -452,7 +460,7 @@ async def websocket_stream(websocket: WebSocket):
     WebSocket endpoint for bidirectional TTS streaming.
 
     Client messages:
-    - {"action": "generate", "text": "...", "voice_id": "...", "chunk_size": 4096}
+    - {"action": "generate", "text": "...", "voice_id": "...", "engine": "...", "language": "...", "chunk_size": 4096}
     - {"action": "stop"}
     - {"action": "ping"}
 
@@ -465,11 +473,6 @@ async def websocket_stream(websocket: WebSocket):
     """
     await websocket.accept()
     manager = get_model_manager()
-
-    if not manager.current_engine:
-        await websocket.send_json({"type": "error", "message": "No engine initialized"})
-        await websocket.close()
-        return
 
     stop_flag = asyncio.Event()
 
@@ -494,10 +497,17 @@ async def websocket_stream(websocket: WebSocket):
                 stop_flag.clear()
                 text = data.get("text", "")
                 voice_id = data.get("voice_id")
+                engine = data.get("engine")
+                language = data.get("language")
                 chunk_size = data.get("chunk_size", 4096)
 
                 if not text:
                     await websocket.send_json({"type": "error", "message": "No text provided"})
+                    continue
+
+                # Check engine availability
+                if not manager.current_engine and not engine:
+                    await websocket.send_json({"type": "error", "message": "No engine initialized"})
                     continue
 
                 start_time = time.time()
@@ -509,10 +519,15 @@ async def websocket_stream(websocket: WebSocket):
                         loop = asyncio.get_event_loop()
 
                         def generate():
+                            kwargs = {}
+                            if language:
+                                kwargs["language"] = language
                             return manager.generate_stream(
                                 text=text,
                                 voice_id=voice_id,
                                 chunk_size=chunk_size,
+                                engine=engine,
+                                **kwargs,
                             )
 
                         # Run generator in thread

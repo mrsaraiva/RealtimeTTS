@@ -83,12 +83,46 @@ Content-Type: application/json
 }
 ```
 
+**Request Parameters:**
+- `text` (required): Text to synthesize
+- `voice_id` (optional): Voice ID to use
+- `engine` (optional): Engine to use for this request (e.g., "chatterbox", "kokoro")
+- `temperature` (optional): Sampling temperature (0.0-1.0)
+- `exaggeration` (optional): Exaggeration factor for Chatterbox (0.0-1.0)
+- `cfg_weight` (optional): CFG weight for Chatterbox (0.0-1.0)
+- `language` (optional): Language code for multilingual engines (e.g., "fr", "es")
+
+**Direct engine selection** (no switch needed):
+```bash
+POST /v1/tts/generate
+Content-Type: application/json
+
+{
+  "text": "Bonjour le monde!",
+  "engine": "chatterbox",
+  "language": "fr"
+}
+```
+
 Returns a complete WAV file.
 
 #### Stream via SSE
 
 ```bash
 GET /v1/tts/stream-sse?text=Hello&voice_id=default&chunk_size=4096
+```
+
+**Query Parameters:**
+- `text` (required): Text to synthesize
+- `voice_id` (optional): Voice ID to use
+- `engine` (optional): Engine to use for this request
+- `chunk_size` (optional): Size of audio chunks (default: 4096)
+- `temperature` (optional): Sampling temperature (default: 0.7)
+- `language` (optional): Language code for multilingual engines
+
+**Direct engine selection:**
+```bash
+GET /v1/tts/stream-sse?text=Hello&engine=kokoro
 ```
 
 Returns Server-Sent Events with base64-encoded audio chunks.
@@ -107,9 +141,17 @@ WS /v1/tts/stream
 Client messages:
 ```json
 {"action": "generate", "text": "Hello", "voice_id": "default"}
+{"action": "generate", "text": "Hola", "engine": "chatterbox", "language": "es"}
 {"action": "stop"}
 {"action": "ping"}
 ```
+
+**Generate action parameters:**
+- `text` (required): Text to synthesize
+- `voice_id` (optional): Voice ID to use
+- `engine` (optional): Engine to use for this request
+- `language` (optional): Language code for multilingual engines
+- `chunk_size` (optional): Size of audio chunks (default: 4096)
 
 Server messages:
 - Binary audio chunks
@@ -125,7 +167,9 @@ Server messages:
 GET /v1/engines
 ```
 
-#### Switch Engine
+Returns list of loaded engines, current default engine, and supported engines.
+
+#### Switch Default Engine
 
 ```bash
 POST /v1/engines/switch
@@ -136,6 +180,12 @@ Content-Type: application/json
   "config": {"model_type": "turbo"}
 }
 ```
+
+Changes the default engine used when no `engine` parameter is specified.
+
+**Note:** When using multi-engine mode (pre-loading multiple engines at startup), you can switch between loaded engines instantly by specifying the `engine` parameter in your requests. The `/v1/engines/switch` endpoint is useful for:
+- Changing the default engine for requests that don't specify one
+- Loading a new engine that wasn't pre-loaded at startup
 
 ### Voice Management
 
@@ -175,12 +225,24 @@ POST /v1/voices/{voice_id}/set
 ```python
 import requests
 
-# Generate audio
+# Generate audio with default engine
 response = requests.post(
     "http://localhost:8000/v1/tts/generate",
     json={"text": "Hello, world!"}
 )
 with open("output.wav", "wb") as f:
+    f.write(response.content)
+
+# Direct engine selection (no switch needed)
+response = requests.post(
+    "http://localhost:8000/v1/tts/generate",
+    json={
+        "text": "Bonjour le monde!",
+        "engine": "chatterbox",
+        "language": "fr"
+    }
+)
+with open("output_fr.wav", "wb") as f:
     f.write(response.content)
 ```
 
@@ -189,7 +251,9 @@ with open("output.wav", "wb") as f:
 ```python
 import requests
 import base64
+import json
 
+# Stream with default engine
 response = requests.get(
     "http://localhost:8000/v1/tts/stream-sse",
     params={"text": "Hello, world!"},
@@ -202,6 +266,13 @@ for line in response.iter_lines():
         data = json.loads(line[5:])
         if "chunk" in data:
             audio_chunks.append(base64.b64decode(data["chunk"]))
+
+# Stream with specific engine
+response = requests.get(
+    "http://localhost:8000/v1/tts/stream-sse",
+    params={"text": "Hola mundo!", "engine": "chatterbox", "language": "es"},
+    stream=True
+)
 ```
 
 ### JavaScript (WebSocket)
@@ -229,9 +300,18 @@ ws.onmessage = (event) => {
 };
 
 ws.onopen = () => {
+    // Generate with default engine
     ws.send(JSON.stringify({
         action: "generate",
         text: "Hello, world!"
+    }));
+
+    // Or generate with specific engine
+    ws.send(JSON.stringify({
+        action: "generate",
+        text: "Bonjour le monde!",
+        engine: "chatterbox",
+        language: "fr"
     }));
 };
 ```
