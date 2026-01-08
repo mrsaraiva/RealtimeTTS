@@ -896,6 +896,48 @@ async def list_voices():
     ]
 
 
+@app.get("/v1/engines/{engine_name}/voices", response_model=list[VoiceResponse], tags=["Voices"])
+async def list_engine_voices(engine_name: str):
+    """
+    List all voices available for a specific engine.
+
+    This endpoint directly queries the engine for its built-in voices.
+
+    **Kokoro voices** (54 built-in):
+    - American English: af_heart, af_alloy, af_bella, am_adam, am_echo, etc.
+    - British English: bf_alice, bf_emma, bm_daniel, bm_george, etc.
+    - Japanese: jf_alpha, jf_gongitsune, jm_kumo, etc.
+    - Chinese: zf_xiaobei, zm_yunjian, etc.
+    - Spanish, French, Hindi, Italian, Portuguese
+
+    **Chatterbox voices**:
+    - Uses voice cloning from audio files (no built-in named voices)
+    - Returns custom voices from voices directory + "default"
+    """
+    manager = get_model_manager()
+    voices = manager.get_engine_voices(engine_name)
+
+    if not voices:
+        # Check if engine exists
+        available = manager.available_engines
+        if engine_name not in available:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Engine '{engine_name}' not found. Available: {available}",
+            )
+
+    return [
+        VoiceResponse(
+            id=v.id,
+            name=v.name,
+            engine=v.engine,
+            language=v.language,
+            is_default=v.is_default,
+        )
+        for v in voices
+    ]
+
+
 @app.post("/v1/voices/create", response_model=VoiceResponse, tags=["Voices"])
 async def create_voice(
     name: str = Form(...),

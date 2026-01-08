@@ -498,23 +498,74 @@ class ModelManager:
         logger.info(f"Loaded {len(self._voices)} voices from disk")
 
     def get_voices(self) -> List[VoiceInfo]:
-        """Get all available voices."""
-        # Also get voices from current engine
+        """Get all available voices including engine built-in voices."""
+        # Start with custom voices from disk
         voices = list(self._voices.values())
 
         if self.current_engine:
             try:
                 engine_voices = self.current_engine.get_voices()
+                logger.debug(f"Engine returned {len(engine_voices)} voices")
                 for ev in engine_voices:
                     voice_id = getattr(ev, "name", str(ev))
                     if voice_id not in self._voices:
+                        # Extract language from engine voice object
+                        # KokoroVoice uses language_code, ChatterboxVoice uses language
+                        language = getattr(ev, "language_code", None) or getattr(ev, "language", "en")
                         voices.append(VoiceInfo(
                             id=voice_id,
                             name=voice_id,
                             engine=self._current_engine_name or "unknown",
+                            language=language,
                         ))
             except Exception as e:
-                logger.warning(f"Could not get engine voices: {e}")
+                logger.warning(f"Could not get engine voices: {e}", exc_info=True)
+
+        return voices
+
+    def get_engine_voices(self, engine_name: Optional[str] = None) -> List[VoiceInfo]:
+        """
+        Get voices for a specific engine or current engine.
+
+        Args:
+            engine_name: Engine name to get voices for. If None, uses current engine.
+
+        Returns:
+            List of VoiceInfo objects for the specified engine.
+        """
+        engine = None
+        target_engine_name = engine_name
+
+        if engine_name:
+            # Get specific engine from preloaded engines
+            engine = self._engines.get(engine_name)
+            if not engine:
+                logger.warning(f"Engine '{engine_name}' not found in preloaded engines")
+                return []
+        else:
+            engine = self.current_engine
+            target_engine_name = self._current_engine_name
+
+        if not engine:
+            logger.warning("No engine available to get voices from")
+            return []
+
+        voices = []
+        try:
+            engine_voices = engine.get_voices()
+            logger.debug(f"Engine '{target_engine_name}' returned {len(engine_voices)} voices")
+            for ev in engine_voices:
+                voice_id = getattr(ev, "name", str(ev))
+                # Extract language from engine voice object
+                language = getattr(ev, "language_code", None) or getattr(ev, "language", "en")
+                voices.append(VoiceInfo(
+                    id=voice_id,
+                    name=voice_id,
+                    engine=target_engine_name or "unknown",
+                    language=language,
+                ))
+        except Exception as e:
+            logger.error(f"Error getting voices from engine '{target_engine_name}': {e}", exc_info=True)
 
         return voices
 
