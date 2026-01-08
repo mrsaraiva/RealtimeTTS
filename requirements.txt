@@ -28,6 +28,9 @@ kokoro==0.9.4
 # snac is for OrpheusEngine
 snac==1.2.1
 
+# chatterbox-tts is for ChatterboxEngine
+chatterbox-tts==0.1.1
+
 # fugashi is to support japanese language for KokoroEngine
 fugashi==1.4.0
 jaconv==0.4.0
