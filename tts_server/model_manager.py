@@ -461,8 +461,22 @@ class ModelManager:
 
             thread.join()
 
-    def get_stream_info(self) -> tuple:
-        """Get audio stream configuration from current engine."""
+    def get_stream_info(self, engine_name: Optional[str] = None) -> tuple:
+        """
+        Get audio stream configuration from an engine.
+
+        Args:
+            engine_name: Optional engine name. If None, uses current engine.
+
+        Returns:
+            Tuple of (format, channels, sample_rate)
+        """
+        if engine_name:
+            engine = self.get_engine(engine_name)
+            if not engine:
+                raise ValueError(f"Engine '{engine_name}' not loaded")
+            return engine.get_stream_info()
+
         if not self.current_engine:
             raise RuntimeError("No engine initialized")
         return self.current_engine.get_stream_info()

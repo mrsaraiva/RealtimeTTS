@@ -620,8 +620,8 @@ async def generate_audio(request: TTSRequest):
 
         generation_time = time.time() - start_time
 
-        # Get stream info for proper conversion
-        format_type, channels, sample_rate = manager.get_stream_info()
+        # Get stream info for proper conversion (from the target engine)
+        format_type, channels, sample_rate = manager.get_stream_info(request.engine)
 
         # Determine sample width from format
         import pyaudio
@@ -728,8 +728,8 @@ async def stream_sse(
         total_bytes = 0
         chunk_count = 0
 
-        # Get source format info
-        format_type, channels, sample_rate = manager.get_stream_info()
+        # Get source format info from the target engine
+        format_type, channels, sample_rate = manager.get_stream_info(engine)
         import pyaudio
         if format_type == pyaudio.paFloat32:
             src_width = 4
@@ -890,8 +890,8 @@ async def websocket_stream(websocket: WebSocket):
                         })
                         continue
 
-                # Get source format info
-                format_type, channels, sample_rate = manager.get_stream_info()
+                # Get source format info from the target engine
+                format_type, channels, sample_rate = manager.get_stream_info(engine)
                 import pyaudio
                 if format_type == pyaudio.paFloat32:
                     src_width = 4
