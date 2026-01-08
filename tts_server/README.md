@@ -228,17 +228,60 @@ ws.onopen = () => {
 
 ## Docker
 
-```dockerfile
-FROM python:3.11-slim
+### Quick Start with Docker Compose
 
-WORKDIR /app
-COPY . .
+```bash
+# With GPU (default)
+docker-compose up -d
 
-RUN pip install -r tts_server/requirements.txt
-RUN pip install realtimetts[chatterbox]
+# Without GPU (CPU only)
+docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
 
-EXPOSE 8000
-CMD ["python", "-m", "tts_server.app", "--engine", "chatterbox"]
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+### Configuration
+
+Create a `.env` file to customize:
+
+```bash
+# TTS Engine (default: chatterbox)
+TTS_ENGINE=chatterbox
+
+# Chatterbox model type: standard, turbo, multilingual
+CHATTERBOX_MODEL_TYPE=turbo
+
+# API Keys for cloud engines (optional)
+OPENAI_API_KEY=sk-...
+AZURE_SPEECH_KEY=...
+AZURE_SPEECH_REGION=eastus
+ELEVENLABS_API_KEY=...
+
+# Hugging Face token for gated models (optional)
+HF_TOKEN=hf_...
+```
+
+### Build Manually
+
+```bash
+# Build image
+docker build -t realtimetts-server -f tts_server/Dockerfile .
+
+# Run with GPU
+docker run -p 8000:8000 --gpus all \
+  -v ./voices:/app/voices \
+  -e TTS_ENGINE=chatterbox \
+  realtimetts-server
+
+# Run without GPU
+docker run -p 8000:8000 \
+  -v ./voices:/app/voices \
+  -e TTS_ENGINE=system \
+  realtimetts-server
 ```
 
 ## Production Deployment

@@ -1,0 +1,57 @@
+# RealtimeTTS Production Server Dockerfile
+#
+# Build: docker build -t realtimetts-server .
+# Run:   docker run -p 8000:8000 --gpus all realtimetts-server
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    portaudio19-dev \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY tts_server/requirements.txt ./tts_server/
+COPY requirements.txt ./
+COPY setup.py ./
+COPY README.md ./
+
+# Copy the main package
+COPY RealtimeTTS/ ./RealtimeTTS/
+
+# Copy the server
+COPY tts_server/ ./tts_server/
+
+# Install dependencies
+RUN pip install --upgrade pip && \
+    pip install -r tts_server/requirements.txt && \
+    pip install -e ".[chatterbox]"
+
+# Create voices directory
+RUN mkdir -p /app/voices
+
+# Default environment variables
+ENV TTS_ENGINE=chatterbox \
+    TTS_VOICES_PATH=/app/voices \
+    CHATTERBOX_MODEL_TYPE=standard
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+# Run the server
+CMD ["python", "-m", "tts_server.app", "--host", "0.0.0.0", "--port", "8000"]

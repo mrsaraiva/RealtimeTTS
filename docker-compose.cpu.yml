@@ -1,0 +1,16 @@
+# CPU-only override for RealtimeTTS Server
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+#
+# This removes GPU requirements for systems without NVIDIA GPUs
+
+services:
+  tts-api:
+    deploy:
+      resources:
+        reservations:
+          devices: []
+    environment:
+      # Force CPU device for local engines
+      - CUDA_VISIBLE_DEVICES=""

@@ -1,0 +1,63 @@
+# RealtimeTTS Production Server - Docker Compose
+#
+# Quick Start:
+#   docker-compose up -d
+#
+# With GPU:
+#   docker-compose up -d
+#
+# Without GPU (CPU only):
+#   docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+#
+# View logs:
+#   docker-compose logs -f
+#
+# Stop:
+#   docker-compose down
+
+services:
+  tts-api:
+    build:
+      context: .
+      dockerfile: tts_server/Dockerfile
+    image: realtimetts-server:latest
+    container_name: realtimetts-api
+    ports:
+      - "8000:8000"
+    environment:
+      # TTS Engine: system, azure, openai, elevenlabs, coqui, kokoro, edge, gtts, chatterbox
+      - TTS_ENGINE=${TTS_ENGINE:-chatterbox}
+      # Chatterbox model type: standard, turbo, multilingual
+      - CHATTERBOX_MODEL_TYPE=${CHATTERBOX_MODEL_TYPE:-standard}
+      # Voices directory (inside container)
+      - TTS_VOICES_PATH=/app/voices
+      # Hugging Face token (optional, for gated models)
+      - HF_TOKEN=${HF_TOKEN:-}
+      # API Keys (set these for cloud engines)
+      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
+      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+    volumes:
+      # Persist custom voices
+      - ./voices:/app/voices
+      # Cache Hugging Face models
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  hf-cache:
+    name: realtimetts-hf-cache
