@@ -18,17 +18,22 @@ ARG TTS_EXTRAS="chatterbox,kokoro"
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    UV_SYSTEM_PYTHON=1 \
+    UV_NO_CACHE=1
 
-# Install system dependencies
+# Install system dependencies and uv
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     portaudio19-dev \
     ffmpeg \
     git \
     espeak-ng \
+    curl \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
+
+# Add uv to PATH
+ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
@@ -36,6 +41,7 @@ WORKDIR /app
 COPY tts_server/requirements.txt ./tts_server/
 COPY requirements.txt ./
 COPY setup.py ./
+COPY pyproject.toml ./
 COPY README.md ./
 
 # Copy the main package
@@ -44,10 +50,9 @@ COPY RealtimeTTS/ ./RealtimeTTS/
 # Copy the server
 COPY tts_server/ ./tts_server/
 
-# Install dependencies with specified extras
-RUN pip install --upgrade pip && \
-    pip install -r tts_server/requirements.txt && \
-    pip install -e ".[$TTS_EXTRAS]"
+# Install dependencies with uv (much faster than pip)
+RUN uv pip install -r tts_server/requirements.txt && \
+    uv pip install -e ".[$TTS_EXTRAS]"
 
 # Create voices directory
 RUN mkdir -p /app/voices
