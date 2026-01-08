@@ -1,9 +1,19 @@
 # RealtimeTTS Production Server Dockerfile
 #
-# Build: docker build -t realtimetts-server .
-# Run:   docker run -p 8000:8000 --gpus all realtimetts-server
+# Build with specific engines:
+#   docker build --build-arg TTS_EXTRAS="chatterbox,kokoro" -t realtimetts-server .
+#
+# Build with all engines:
+#   docker build --build-arg TTS_EXTRAS="all" -t realtimetts-server .
+#
+# Run:
+#   docker run -p 8000:8000 --gpus all realtimetts-server
 
 FROM python:3.11-slim
+
+# Build argument for which engine extras to install
+# Options: chatterbox, kokoro, coqui, azure, openai, elevenlabs, edge, gtts, all
+ARG TTS_EXTRAS="chatterbox,kokoro"
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -17,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     portaudio19-dev \
     ffmpeg \
     git \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -33,10 +44,10 @@ COPY RealtimeTTS/ ./RealtimeTTS/
 # Copy the server
 COPY tts_server/ ./tts_server/
 
-# Install dependencies
+# Install dependencies with specified extras
 RUN pip install --upgrade pip && \
     pip install -r tts_server/requirements.txt && \
-    pip install -e ".[chatterbox]"
+    pip install -e ".[$TTS_EXTRAS]"
 
 # Create voices directory
 RUN mkdir -p /app/voices

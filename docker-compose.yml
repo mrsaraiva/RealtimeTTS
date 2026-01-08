@@ -20,6 +20,9 @@ services:
     build:
       context: .
       dockerfile: tts_server/Dockerfile
+      args:
+        # Engines to install: chatterbox, kokoro, coqui, azure, openai, elevenlabs, edge, gtts, all
+        TTS_EXTRAS: ${TTS_EXTRAS:-chatterbox,kokoro}
     image: realtimetts-server:latest
     container_name: realtimetts-api
     ports:

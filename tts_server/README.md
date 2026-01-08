@@ -282,13 +282,22 @@ HF_TOKEN=hf_...
 ### Build Manually
 
 ```bash
-# Build image
+# Build with default engines (chatterbox + kokoro)
 docker build -t realtimetts-server -f tts_server/Dockerfile .
+
+# Build with specific engines
+docker build --build-arg TTS_EXTRAS="chatterbox,kokoro,coqui" \
+  -t realtimetts-server -f tts_server/Dockerfile .
+
+# Build with all engines
+docker build --build-arg TTS_EXTRAS="all" \
+  -t realtimetts-server -f tts_server/Dockerfile .
 
 # Run with GPU
 docker run -p 8000:8000 --gpus all \
   -v ./voices:/app/voices \
-  -e TTS_ENGINE=chatterbox \
+  -e TTS_ENGINES=chatterbox,kokoro \
+  -e TTS_DEFAULT_ENGINE=chatterbox \
   realtimetts-server
 
 # Run without GPU
@@ -297,6 +306,12 @@ docker run -p 8000:8000 \
   -e TTS_ENGINE=system \
   realtimetts-server
 ```
+
+### Build Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `TTS_EXTRAS` | `chatterbox,kokoro` | Comma-separated list of engines to install. Options: `chatterbox`, `kokoro`, `coqui`, `azure`, `openai`, `elevenlabs`, `edge`, `gtts`, `all` |
 
 ## Production Deployment
 
