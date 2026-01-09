@@ -15,9 +15,10 @@ __all__ = [
     "EdgeEngine", "EdgeVoice",
     "StyleTTSEngine", "StyleTTSVoice",
     "PiperEngine", "PiperVoice",
-    "KokoroEngine", "KokoroVoice"
+    "KokoroEngine", "KokoroVoice",
     "OrpheusEngine", "OrpheusVoice",
     "ZipVoiceEngine", "ZipVoiceVoice",
+    "ChatterboxEngine", "ChatterboxVoice",
 ]
 
 
@@ -191,6 +192,20 @@ def _load_zipvoice_engine():
     globals()["ZipVoiceVoice"] = ZipVoiceVoice
     return ZipVoiceEngine
 
+
+def _load_chatterbox_engine():
+    try:
+        from .engines.chatterbox_engine import ChatterboxEngine, ChatterboxVoice
+    except ImportError as e:
+        raise ImportError(
+            "Failed to load ChatterboxEngine and ChatterboxVoice. "
+            "Please install with:\npip install chatterbox-tts"
+        ) from e
+    globals()["ChatterboxEngine"] = ChatterboxEngine
+    globals()["ChatterboxVoice"] = ChatterboxVoice
+    return ChatterboxEngine
+
+
 # Mapping names to their lazy loader functions.
 _lazy_imports = {
     "SystemEngine": _load_system_engine,
@@ -218,7 +233,9 @@ _lazy_imports = {
     "OrpheusEngine": _load_orpheus_engine,
     "OrpheusVoice": _load_orpheus_engine,
     "ZipVoiceEngine": _load_zipvoice_engine,
-    "ZipVoiceVoice": _load_zipvoice_engine,    
+    "ZipVoiceVoice": _load_zipvoice_engine,
+    "ChatterboxEngine": _load_chatterbox_engine,
+    "ChatterboxVoice": _load_chatterbox_engine,
 }
 
 

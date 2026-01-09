@@ -1,20 +1,3 @@
-.gitignore
-_open_cmd.bat
-docs/
-examples/
-batch/
-test_env/
-tests_private/
-tests_hindi/
-docs/
-docs_private/
-env_realtimetts/
-example_rvc/assets/
-package_backups/
-server/
-check_versions.py
-RealtimeTTS.code-workspace
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -176,6 +159,61 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Audio files (generated outputs)
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.aac
+*.m4a
+output/
+outputs/
+
+# ML model files
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+models/
+checkpoints/
+
+# TTS engine caches
+.coqui/
+.kokoro/
+.piper/
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# uv
+uv.lock
+
+# Misc
+.gitignore
+_open_cmd.bat
+batch/
+check_versions.py
+CLAUDE.md
 deepspeed/flash_attn-2.6.3-cp310-cp310-win_amd64.whl
+docs/
+docs_private/
+env_realtimetts/
+example_rvc/assets/
+examples/
+package_backups/
+RealtimeTTS.code-workspace
+server/
+test_env/
+tests_hindi/
+tests_private/
 tests/hello.mp3
 tests/hello.srt

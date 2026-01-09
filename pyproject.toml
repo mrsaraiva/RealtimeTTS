@@ -1,0 +1,146 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realtimetts"
+version = "0.5.6"
+description = "Stream text into audio with an easy-to-use, highly configurable library delivering voice output with minimal latency."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Kolja Beigel", email = "kolja.beigel@web.de"}
+]
+maintainers = [
+    {name = "Kolja Beigel", email = "kolja.beigel@web.de"}
+]
+keywords = [
+    "real-time",
+    "text-to-speech",
+    "TTS",
+    "streaming",
+    "audio",
+    "voice",
+    "synthesis",
+    "sentence-segmentation",
+    "low-latency",
+    "character-streaming",
+    "dynamic feedback",
+    "audio-output",
+    "text-input",
+    "TTS-engine",
+    "audio-playback",
+    "stream-player",
+    "sentence-fragment",
+    "audio-feedback",
+    "interactive",
+    "python",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+requires-python = ">=3.9,<3.13"
+
+dependencies = [
+    "stream2sentence==0.3.1",
+    "pydub==0.25.1",
+    "pyaudio==0.2.14",
+    "resampy==0.4.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/KoljaB/realtimetts"
+Repository = "https://github.com/KoljaB/realtimetts"
+Documentation = "https://github.com/KoljaB/realtimetts#readme"
+Issues = "https://github.com/KoljaB/realtimetts/issues"
+
+[project.optional-dependencies]
+# Minimal installation (base only)
+minimal = []
+
+# Individual engines
+system = ["pyttsx3==2.98"]
+azure = ["azure-cognitiveservices-speech==1.45.0"]
+elevenlabs = ["elevenlabs==2.8.0"]
+openai = ["openai==1.97.0"]
+gtts = ["gtts==2.5.4"]
+coqui = ["coqui_tts==0.27.0"]
+edge = ["edge-tts==7.0.2"]
+kokoro = ["kokoro==0.9.4"]
+orpheus = ["snac==1.2.1"]
+chatterbox = ["chatterbox-tts==0.1.6"]
+
+# Language support for KokoroEngine
+jp = [
+    "mecab-python3==1.0.6",
+    "unidic-lite==1.0.8",
+    "cutlet",
+    "fugashi==1.4.0",
+    "jaconv==0.4.0",
+    "mojimoji==0.0.13",
+    "pyopenjtalk==0.4.0",
+]
+zh = [
+    "pypinyin==0.54.0",
+    "ordered_set==4.1.0",
+    "jieba==0.42.1",
+    "cn2an==0.5.23",
+]
+ko = ["hangul_romanize"]
+
+# All engines combined
+all = [
+    "pyttsx3==2.98",
+    "azure-cognitiveservices-speech==1.45.0",
+    "elevenlabs==2.8.0",
+    "openai==1.97.0",
+    "gtts==2.5.4",
+    "coqui_tts==0.27.0",
+    "edge-tts==7.0.2",
+    "kokoro==0.9.4",
+    "snac==1.2.1",
+    "chatterbox-tts==0.1.6",
+]
+
+# Server dependencies
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "pydantic>=2.0.0",
+    "python-multipart>=0.0.6",
+]
+
+# Development dependencies
+dev = [
+    "ruff",
+    "pre-commit",
+    "pytest",
+]
+
+[tool.setuptools]
+packages = ["RealtimeTTS", "RealtimeTTS.engines", "tts_server"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+RealtimeTTS = ["engines/*.json"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
